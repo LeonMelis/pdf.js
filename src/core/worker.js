@@ -1014,7 +1014,7 @@ function initializeWorker() {
 
 // Worker thread (and not node.js)?
 if (typeof window === 'undefined' &&
-    !(typeof module !== 'undefined' && module.require)) {
+    !(typeof module !== 'undefined' && module.exports)) {
   initializeWorker();
 }
 
