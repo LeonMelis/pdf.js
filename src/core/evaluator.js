@@ -1151,6 +1151,11 @@ var PartialEvaluator = (function PartialEvaluatorClosure() {
         items: [],
         styles: Object.create(null)
       };
+
+      //LM: added
+      var images = {};
+      var imageInstances = [];
+
       var textContentItem = {
         initialized: false,
         str: [],
@@ -1597,30 +1602,68 @@ var PartialEvaluator = (function PartialEvaluatorClosure() {
               var type = xobj.dict.get('Subtype');
               assert(isName(type), 'XObject should have a Name subtype');
 
-              if ('Form' !== type.name) {
-                xobjsCache.key = name;
-                xobjsCache.texts = null;
-                break;
-              }
+              if ('Form' === type.name) {
+                  stateManager.save();
+                  var matrix = xobj.dict.getArray('Matrix');
+                  if (isArray(matrix) && matrix.length === 6) {
+                      stateManager.transform(matrix);
+                  }
 
-              stateManager.save();
-              var matrix = xobj.dict.getArray('Matrix');
-              if (isArray(matrix) && matrix.length === 6) {
-                stateManager.transform(matrix);
-              }
+                  next(self.getTextContent(xobj, task,
+                      xobj.dict.get('Resources') || resources, stateManager,
+                      normalizeWhitespace, combineTextItems).then(
+                      function (formContent) {
+                          Util.appendToArray(textContent.items, formContent.textContent.items);
+                          Util.appendToArray(imageInstances, formContent.imageInstances);
 
-              next(self.getTextContent(xobj, task,
-                   xobj.dict.get('Resources') || resources, stateManager,
-                   normalizeWhitespace, combineTextItems).then(
-                function (formTextContent) {
-                  Util.appendToArray(textContent.items, formTextContent.items);
-                  Util.extendObj(textContent.styles, formTextContent.styles);
-                  stateManager.restore();
+                          Util.extendObj(textContent.styles, formContent.textContent.styles);
+                          Util.extendObj(images, formContent.images);
+                          stateManager.restore();
 
+                          xobjsCache.key = name;
+                          xobjsCache.texts = formContent;
+                      }));
+                  return;
+              } else if (type.name === 'Image') {
+                  stateManager.save();
+                  next(PDFImage.buildImage(self.handler, self.xref, resources, xobj, null, false).then(function (imageObj) {
+                      var extractedImage;
+
+                      extractedImage = {
+                          ctm: stateManager.state.ctm,
+                          pageIndex: self.pageIndex,
+                          name: name
+                      };
+
+                      if (!images.hasOwnProperty(name)) {
+                          var image = imageObj.image,
+                              raw;
+
+                          if (image.stream) {
+                              raw = image.stream.buffer ?
+                                  new Uint8Array(image.stream.buffer.buffer, 0, image.stream.bufferLength) :
+                                  new Uint8Array(image.stream.bytes.buffer, image.stream.start, image.stream.end - image.stream.start)
+                          } else {
+                              raw = image.getBytes();
+                          }
+
+                          images[name] = {
+                              width: imageObj.image.dict.get('Width'),
+                              height: imageObj.image.dict.get('Height'),
+                              raw: raw
+                          }
+                      }
+
+                      Util.appendToArray(imageInstances, [extractedImage]);
+                      stateManager.restore();
+                  }));
+                  return;
+              } else {
                   xobjsCache.key = name;
-                  xobjsCache.texts = formTextContent;
-                }));
-              return;
+                  xobjsCache.texts = null;
+                  break;
+              }
+
             case OPS.setGState:
               flushTextContentItem();
               var dictName = args[0];
@@ -1648,7 +1691,11 @@ var PartialEvaluator = (function PartialEvaluatorClosure() {
           return;
         }
         flushTextContentItem();
-        resolve(textContent);
+        resolve({
+          textContent,
+          imageInstances,
+          images
+        });
       });
     },
 
